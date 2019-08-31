@@ -1,96 +1,195 @@
-﻿#region License_Do_Not_Remove
-/* 
-*  Made by TheDarkJoker94. 
-*  Check http://thedarkjoker94.cer33.com/ for more C# Tutorials 
-*  and also SUBSCRIBE to my Youtube Channel http://www.youtube.com/user/TheDarkJoker094  
-*  GlobalKeyboardHook is licensed under a Creative Commons Attribution 3.0 Unported License.(http://creativecommons.org/licenses/by/3.0/)
-*  This means you can use this Code for whatever you want as long as you credit me! That means...
-*  DO NOT REMOVE THE LINES ABOVE !!! 
-*/
-#endregion
-using System;
-using System.Text;
-using System.Collections.Generic;
+﻿using System;
+using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Windows.Forms;   
+using System.Windows.Forms;
 
-public class GlobalKeyboardHook
+public class KeyboardHook
 {
-    [DllImport("user32.dll")]
-    static extern int CallNextHookEx(IntPtr hhk, int code, int wParam, ref keyBoardHookStruct lParam);
-    [DllImport("user32.dll")]
-    static extern IntPtr SetWindowsHookEx(int idHook, LLKeyboardHook callback, IntPtr hInstance, uint theardID);
-    [DllImport("user32.dll")]
-    static extern bool UnhookWindowsHookEx(IntPtr hInstance);
-    [DllImport("kernel32.dll")]
-    static extern IntPtr LoadLibrary(string lpFileName);
 
-    public delegate int LLKeyboardHook(int Code, int wParam, ref keyBoardHookStruct lParam);
+    // System Code: Low Level Keyboard Hook
+    private const int WH_KEYBOARD_LL = 13;
 
-    public struct keyBoardHookStruct
+    // System Event Code: Key Down Event
+    private const int WM_KEYDOWN = 0x100;
+
+    // System Event Code: System Key Down Event
+    private const int WM_SYSKEYDOWN = 0x104;
+
+    // Stores the handle to the Keyboard hook procedure.
+    private static int s_KeyboardHookHandle;
+
+    //是否只由這個Global Hook抓取鍵盤事件
+    public static bool globalControlOnly = false;
+
+    //Private KeyDown Event, 與GlobalKeyDown配合使用
+    private static event KeyEventHandler _globalKeyDown;
+
+    // Public KeyDown Event
+    // 每次只能一個Event Handler處理這個Event
+    // 加入和解除EventHandler時會自動安裝和解除Hook
+    public static event KeyEventHandler GlobalKeyDown
     {
-        public int vkCode;
-        public int scanCode;
-        public int flags;
-        public int time;
-        public int dwExtraInfo;
-    }
-
-    const int WH_KEYBOARD_LL = 13;
-    const int WM_KEYDOWN = 0x0100;
-    const int WM_KEYUP = 0x0101;
-    const int WM_SYSKEYDOWN = 0x0104;
-    const int WM_SYSKEYUP = 0x0105;
-
-    LLKeyboardHook llkh;
-    public List<Keys> HookedKeys = new List<Keys>();
-
-    IntPtr Hook = IntPtr.Zero;
-
-    public event KeyEventHandler KeyDown;
-    public event KeyEventHandler KeyUp;
-
-    // This is the Constructor. This is the code that runs every time you create a new GlobalKeyboardHook object
-    public GlobalKeyboardHook()
-    {
-        llkh = new LLKeyboardHook(HookProc);
-        // This starts the hook. You can leave this as comment and you have to start it manually (the thing I do in the tutorial, with the button)
-        // Or delete the comment mark and your hook will start automatically when your program starts (because a new GlobalKeyboardHook object is created)
-        // That's why there are duplicates, because you start it twice! I'm sorry, I haven't noticed this...
-        // hook(); <-- Choose!
-    }
-    ~GlobalKeyboardHook()
-    { unhook(); }
-
-    public void hook()
-    {
-        IntPtr hInstance = LoadLibrary("User32");
-        Hook = SetWindowsHookEx(WH_KEYBOARD_LL, llkh, hInstance, 0);
-    }
-
-    public void unhook()
-    {
-        UnhookWindowsHookEx(Hook);
-    }
-
-    public int HookProc(int Code, int wParam, ref keyBoardHookStruct lParam)
-    {
-        if (Code >= 0)
+        add
         {
-            Keys key = (Keys)lParam.vkCode;
-            if (HookedKeys.Contains(key))
-            {
-                KeyEventArgs kArg = new KeyEventArgs(key);
-                if ((wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) && (KeyDown != null))
-                    KeyDown(this, kArg);
-                else if ((wParam == WM_KEYUP || wParam == WM_SYSKEYUP) && (KeyUp != null))
-                    KeyUp(this, kArg);
-                if (kArg.Handled)
-                    return 1;
-            }
+            KeyboardHook.HookKeyboard();
+            KeyboardHook._globalKeyDown += value;
         }
-        return CallNextHookEx(Hook, Code, wParam, ref lParam);
+        remove
+        {
+            KeyboardHook._globalKeyDown -= value;
+            KeyboardHook.UnhookKeyboard();
+        }
+    }
+
+
+
+
+    // 當hook抓到key event時的處理程序
+    public delegate int HookProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    // Hook handle
+    private static int m_HookHandle = 0;
+
+    // Keyboard Hook函式指標
+    private static HookProc m_KbdHookProc;
+
+    // WinAPI 取得Module Handle
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+    // WinAPI 加入Hook
+    [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+    public static extern int SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hInstance, int threadId);
+
+
+    // WinAPI 解除Hook
+    [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool UnhookWindowsHookEx(int idHook);
+
+
+    // WinAPI  將Event傳給下一個Hook，如不執行此項，則只有這個Hook會被執行
+    [DllImport("user32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
+    public static extern int CallNextHookEx(int idHook, int nCode, IntPtr wParam, IntPtr lParam);
+
+
+    private static void HookKeyboard()
+    {
+        if (m_HookHandle == 0)
+        {
+
+            KeyboardHook.s_KeyboardHookHandle = SetWindowsHookEx(WH_KEYBOARD_LL, m_KbdHookProc,
+                                                                 Marshal.GetHINSTANCE(Assembly.GetExecutingAssembly().GetModules()[0]), 0);
+
+            using (Process curProcess = Process.GetCurrentProcess())
+            {
+                using (ProcessModule curModule = curProcess.MainModule)
+                {
+                    m_KbdHookProc = new HookProc(KeyboardHookProc);
+                    m_HookHandle = SetWindowsHookEx(WH_KEYBOARD_LL, m_KbdHookProc, GetModuleHandle(curModule.ModuleName), 0);
+                }
+            }
+
+            if (m_HookHandle == 0)
+            {
+                throw new Exception("Install Global Keyboard Hook Faild.");
+            }
+
+        }
+    }
+
+
+    private static void UnhookKeyboard()
+    {
+
+        if (m_HookHandle != 0)
+        {
+            bool ret = UnhookWindowsHookEx(m_HookHandle);
+            if (ret)
+            {
+                m_HookHandle = 0;
+            }
+            else
+            {
+                throw new Exception("Uninstall Global Keyboard Hook Faild.");
+            }
+
+        }
+
+    }
+
+
+
+
+
+    private static int KeyboardHookProc(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        bool handled = false;
+
+        if (nCode >= 0)
+        {
+
+            if ((int)wParam == WM_KEYDOWN || (int)wParam == WM_SYSKEYDOWN)
+            {
+                KeyboardHookStruct MyKeyboardHookStruct = (KeyboardHookStruct)Marshal.PtrToStructure(lParam, typeof(KeyboardHookStruct));
+
+                Keys keyData = (Keys)MyKeyboardHookStruct.VirtualKeyCode;
+                KeyEventArgs e = new KeyEventArgs(keyData);
+
+                if (KeyboardHook.globalControlOnly)
+                {
+                    e.Handled = true;
+                }
+                else
+                {
+                    e.Handled = false;
+                }
+
+                _globalKeyDown.Invoke(null, e);
+
+                handled = e.Handled;
+            }
+
+        }
+
+
+        if (KeyboardHook.globalControlOnly) return -1;
+
+        return CallNextHookEx(s_KeyboardHookHandle, nCode, wParam, lParam);
+
+
+    }
+
+
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KeyboardHookStruct
+    {
+        /// 
+
+        /// Specifies a virtual-key code. The code must be a value in the range 1 to 254. 
+        /// 
+        public int VirtualKeyCode;
+        /// 
+
+        /// Specifies a hardware scan code for the key. 
+        /// 
+        public int ScanCode;
+        /// 
+
+        /// Specifies the extended-key flag, event-injected flag, context code, and transition-state flag.
+        /// 
+        public int Flags;
+        /// 
+
+        /// Specifies the Time stamp for this message.
+        /// 
+        public int Time;
+        /// 
+
+        /// Specifies extra information associated with the message. 
+        /// 
+        public int ExtraInfo;
     }
 
 }
-

@@ -68,7 +68,6 @@
             this.KeyPreview = true;
             this.Margin = new System.Windows.Forms.Padding(3, 4, 3, 4);
             this.Name = "Form1";
-            this.Opacity = 0.8D;
             this.Text = "Messenger+";
             this.TopMost = true;
             this.Load += new System.EventHandler(this.Form1_Load);

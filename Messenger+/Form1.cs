@@ -62,17 +62,14 @@ namespace Messenger_
             }
 
 
-            GlobalKeyboardHook gHook = new GlobalKeyboardHook();
-            gHook.KeyDown += new KeyEventHandler(Form1_KeyDown);
-            foreach (Keys key in Enum.GetValues(typeof(Keys))) gHook.HookedKeys.Add(key);
-
-            gHook.hook();
+            KeyboardHook.globalControlOnly = false;  //只有Global KeyDown會起作用，其他程式不能攔截鍵盤事件
+            KeyboardHook.GlobalKeyDown += Form1_KeyDown;
         }
 
         public bool shift = false;
         private void Form1_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.Escape && this.ContainsFocus) Application.Exit();
+            if (e.KeyCode == Keys.Escape && ContainsFocus) Application.Exit();
             else if (e.KeyCode == Keys.LShiftKey || e.KeyCode == Keys.RShiftKey)
             {
                 shift = true;
